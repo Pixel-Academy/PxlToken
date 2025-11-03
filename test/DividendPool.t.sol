@@ -57,3 +57,43 @@ contract MockRewardToken is ERC20 {
         _mint(msg.sender, 1_000_000 ether);
     }
 }
+
+contract MockMaliciousRewardToken is ERC20 {
+    DividendPool public dividendPool;
+
+    constructor(address _dividendPool) ERC20("Malicious Reward Token", "MRWD") {
+        _mint(msg.sender, 1_000_000 ether);
+        dividendPool = DividendPool(_dividendPool);
+    }
+
+    function transfer(address to, uint256 amount) public override returns (bool) {
+        console.logString("MockMaliciousRewardToken: transferring");
+        console.logUint(amount);
+        console.logString("to");
+        console.logAddress(to);
+        bool success = super.transfer(to, amount);
+        if (to != address(dividendPool)) {
+            console.logString("MockMaliciousRewardToken: attempting reentrant claim");
+            dividendPool.claim(1);
+        }
+        return success;
+    }
+}
+
+contract MaliciousClaimer {
+    DividendPool public dividendPool;
+
+    constructor(address _dividendPool) {
+        dividendPool = DividendPool(_dividendPool);
+    }
+
+    function attack() public {
+        console.logString("MaliciousClaimer: attack called");
+        dividendPool.claim(1);
+    }
+
+    receive() external payable {
+        console.logString("MaliciousClaimer: receive called");
+        dividendPool.claim(1);
+    }
+}
