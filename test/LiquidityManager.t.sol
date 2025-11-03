@@ -171,3 +171,195 @@ contract MockUniswapV2Router is IUniswapV2Router02 {
     function swapExactETHForTokensSupportingFeeOnTransferTokens(uint amountOutMin, address[] calldata path, address to, uint deadline) external payable override {}
     function swapExactTokensForETHSupportingFeeOnTransferTokens(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline) external override {}
 }
+
+
+contract LiquidityManagerTest is Test {
+    LiquidityManager manager;
+    MockUniswapV2Router router;
+    MockERC20 pxl;
+    MockERC20 usdt;
+    MockERC20 weth;
+    address owner = address(this);
+    address alice = address(0x1);
+
+    function setUp() public {
+        router = new MockUniswapV2Router();
+        pxl = new MockERC20("PXL", "PXL");
+        usdt = new MockERC20("USDT", "USDT");
+        weth = new MockERC20("WETH", "WETH");
+
+        manager = new LiquidityManager(address(router), address(pxl), address(usdt), address(weth));
+
+        pxl.transfer(address(manager), 100_000 ether);
+        usdt.transfer(address(manager), 100_000 ether);
+        weth.transfer(address(manager), 100_000 ether);
+        usdt.transfer(owner, 100_000 ether);
+
+        pxl.transfer(address(router), 100_000 ether);
+        usdt.transfer(address(router), 100_000 ether);
+        weth.transfer(address(router), 100_000 ether);
+
+        pxl.approve(address(manager), 100_000 ether);
+        usdt.approve(address(manager), 100_000 ether);
+        weth.approve(address(manager), 100_000 ether);
+
+        vm.startPrank(address(manager));
+        pxl.approve(address(router), 100_000 ether);
+        usdt.approve(address(router), 100_000 ether);
+        weth.approve(address(router), 100_000 ether);
+        vm.stopPrank();
+
+        vm.prank(owner);
+        usdt.approve(address(manager), 100_000 ether);
+    }
+
+    function test_Constructor() public {
+        assertEq(manager.router(), address(router), "Router mismatch");
+        assertEq(manager.PXL(), address(pxl), "PXL mismatch");
+        assertEq(manager.USDT(), address(usdt), "USDT mismatch");
+        assertEq(manager.WETH(), address(weth), "WETH mismatch");
+        assertEq(manager.owner(), owner, "Owner mismatch");
+    }
+
+    function test_RevertWhen_ConstructorZeroRouter() public {
+        vm.expectRevert("LiquidityManager: zero router");
+        new LiquidityManager(address(0), address(pxl), address(usdt), address(weth));
+    }
+
+    function test_SetRouter() public {
+        address newRouter = address(0x2);
+        vm.expectEmit(true, true, false, false, address(manager));
+        emit LiquidityManager.RouterUpdated(address(router), newRouter);
+        manager.setRouter(newRouter);
+        assertEq(manager.router(), newRouter, "Router not updated");
+    }
+
+    function test_RevertWhen_SetRouterNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert("Ownable: caller is not the owner");
+        manager.setRouter(address(0x2));
+    }
+
+    function test_RevertWhen_SetRouterZero() public {
+        vm.expectRevert("LiquidityManager: zero router");
+        manager.setRouter(address(0));
+    }
+
+    function test_SetPXL() public {
+        address newPXL = address(0x3);
+        vm.expectEmit(true, true, true, false, address(manager));
+        emit LiquidityManager.TokenUpdated("PXL", address(pxl), newPXL);
+        manager.setPXL(newPXL);
+        assertEq(manager.PXL(), newPXL, "PXL not updated");
+    }
+
+    function test_AddLiquidityUSDT() public {
+        uint256 pxlAmount = 1000 ether;
+        uint256 usdtAmount = 1000 ether;
+        uint256 pxlMin = 900 ether;
+        uint256 usdtMin = 900 ether;
+        uint256 deadline = block.timestamp + 1 hours;
+
+        vm.recordLogs();
+        manager.addLiquidityUSDT(pxlAmount, usdtAmount, pxlMin, usdtMin, deadline);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 expectedTopic = keccak256("LiquidityAddedUSDT(uint256,uint256,uint256)");
+        bool foundEvent = false;
+        for (uint i = 0; i < logs.length; i++) {
+            console.log("Event", i, "topic0:", uint256(logs[i].topics[0]));
+            if (logs[i].topics[0] == expectedTopic) {
+                foundEvent = true;
+                (uint256 emittedPxl, uint256 emittedUsdt, uint256 emittedLiquidity) = abi.decode(logs[i].data, (uint256, uint256, uint256));
+                console.log("Emitted LiquidityAddedUSDT:", emittedPxl, emittedUsdt, emittedLiquidity);
+                assertEq(emittedPxl, pxlAmount, "PXL amount mismatch");
+                assertEq(emittedUsdt, usdtAmount, "USDT amount mismatch");
+                assertEq(emittedLiquidity, 1000 ether, "Liquidity amount mismatch");
+                break;
+            }
+        }
+        assertTrue(foundEvent, "LiquidityAddedUSDT event not found");
+    }
+
+    function test_RevertWhen_AddLiquidityUSDTNonOwner() public {
+        vm.prank(alice);
+        vm.expectRevert("Ownable: caller is not the owner");
+        manager.addLiquidityUSDT(1000 ether, 1000 ether, 900 ether, 900 ether, block.timestamp + 1 hours);
+    }
+
+    function test_AddLiquidityETH() public {
+        uint256 pxlAmount = 1000 ether;
+        uint256 pxlMin = 900 ether;
+        uint256 ethMin = 0.9 ether;
+        uint256 deadline = block.timestamp + 1 hours;
+
+        vm.deal(owner, 1 ether);
+        vm.recordLogs();
+        manager.addLiquidityETH{value: 1 ether}(pxlAmount, pxlMin, ethMin, deadline);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 expectedTopic = keccak256("LiquidityAddedETH(uint256,uint256,uint256)");
+        bool foundEvent = false;
+        for (uint i = 0; i < logs.length; i++) {
+            console.log("Event", i, "topic0:", uint256(logs[i].topics[0]));
+            if (logs[i].topics[0] == expectedTopic) {
+                foundEvent = true;
+                (uint256 emittedPxl, uint256 emittedEth, uint256 emittedLiquidity) = abi.decode(logs[i].data, (uint256, uint256, uint256));
+                console.log("Emitted LiquidityAddedETH:", emittedPxl, emittedEth, emittedLiquidity);
+                assertEq(emittedPxl, pxlAmount, "PXL amount mismatch");
+                assertEq(emittedEth, 1 ether, "ETH amount mismatch");
+                assertEq(emittedLiquidity, 1000 ether, "Liquidity amount mismatch");
+                break;
+            }
+        }
+        assertTrue(foundEvent, "LiquidityAddedETH event not found");
+    }
+
+    function test_RevertWhen_AddLiquidityETHZeroETH() public {
+        vm.expectRevert("LiquidityManager: zero ETH");
+        manager.addLiquidityETH{value: 0}(1000 ether, 900 ether, 0.9 ether, block.timestamp + 1 hours);
+    }
+
+    function test_SwapUSDTforPXL() public {
+        uint256 amountIn = 1000 ether;
+        uint256 amountOutMin = 500 ether;
+        uint256 deadline = block.timestamp + 1 hours;
+        address to = alice;
+
+        vm.startPrank(owner);
+        usdt.approve(address(manager), amountIn);
+        vm.recordLogs();
+        manager.swapUSDTforPXL(amountIn, amountOutMin, deadline, to);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        bytes32 expectedTopic = keccak256("SwappedTokens(address,address,uint256,uint256,address)");
+        bool foundEvent = false;
+        for (uint i = 0; i < logs.length; i++) {
+            console.log("Event", i, "topic0:", uint256(logs[i].topics[0]));
+            if (logs[i].topics[0] == expectedTopic) {
+                foundEvent = true;
+                (address emittedFrom, address emittedTo, uint256 emittedIn, uint256 emittedOut, address emittedReceiver) = abi.decode(logs[i].data, (address, address, uint256, uint256, address));
+                console.log("Emitted SwappedTokens:", emittedIn, emittedOut);
+                assertEq(emittedFrom, address(usdt), "From token mismatch");
+                assertEq(emittedTo, address(pxl), "To token mismatch");
+                assertEq(emittedIn, amountIn, "Input amount mismatch");
+                assertEq(emittedOut, 500 ether, "Output amount mismatch");
+                assertEq(emittedReceiver, to, "Receiver mismatch");
+                break;
+            }
+        }
+        assertTrue(foundEvent, "SwappedTokens event not found");
+        vm.stopPrank();
+    }
+
+    function test_RevertWhen_SwapUSDTforPXLNoApproval() public {
+        uint256 amountIn = 1000 ether;
+        uint256 amountOutMin = 500 ether;
+        uint256 deadline = block.timestamp + 1 hours;
+        address to = alice;
+
+        vm.prank(owner);
+        console.log("Owner USDT balance:", usdt.balanceOf(owner));
+        console.log("Owner USDT allowance:", usdt.allowance(owner, address(manager)));
+        usdt.approve(address(manager), 0);
+        vm.expectRevert("ERC20: insufficient allowance");
+        manager.swapUSDTforPXL(amountIn, amountOutMin, deadline, to);
+    }
+}
